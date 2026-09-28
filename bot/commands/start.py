@@ -14,5 +14,5 @@ async def start_command(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await state.clear()
-    language = sync_user(message.from_user)
+    language = await sync_user(message.from_user)
     await send_main_menu(message, language)

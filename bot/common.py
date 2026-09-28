@@ -6,8 +6,8 @@ from localization import telegram_language, translate
 from storage.users import save_user
 
 
-def sync_user(user: User) -> str:
-    return save_user(
+async def sync_user(user: User) -> str:
+    return await save_user(
         telegram_id=user.id,
         username=user.username,
         first_name=user.first_name,
@@ -17,7 +17,10 @@ def sync_user(user: User) -> str:
 
 
 async def authorize_callback(callback: CallbackQuery) -> tuple[str, Callback] | None:
-    language = sync_user(callback.from_user)
+    language = await sync_user(callback.from_user)
+    if not isinstance(callback.message, Message) or callback.message.chat.type != "private":
+        await callback.answer(translate("error.private_chat_only", language), show_alert=True)
+        return None
     data = Callback.unpack(callback.data)
     if data is None or data.owner_id != callback.from_user.id:
         await callback.answer(translate("error.foreign_menu", language), show_alert=True)

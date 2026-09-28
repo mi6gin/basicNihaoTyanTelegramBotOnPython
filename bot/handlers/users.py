@@ -9,4 +9,4 @@ router = Router(name="users")
 @router.message()
 async def register_user(message: Message) -> None:
     if message.from_user is not None:
-        sync_user(message.from_user)
+        await sync_user(message.from_user)

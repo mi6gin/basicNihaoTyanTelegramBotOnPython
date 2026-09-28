@@ -1,138 +1,84 @@
-import asyncio
-import json
-import sqlite3
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from storage.tables import fsm_states
 
 
-class SQLiteStorage(BaseStorage):
-    """Постоянное FSM-хранилище aiogram в SQLite."""
-
-    def __init__(self, database_path: Path) -> None:
-        self.database_path = database_path
-        self._lock = asyncio.Lock()
-        self._initialize()
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA busy_timeout=5000")
-        return connection
+class PostgreSQLStorage(BaseStorage):
+    def __init__(self, engine: AsyncEngine) -> None:
+        self.engine = engine
 
     @staticmethod
-    def _key(key: StorageKey) -> tuple[int, int, int, int, str, str]:
+    def _key(key: StorageKey) -> dict[str, Any]:
+        return {
+            "bot_id": key.bot_id,
+            "chat_id": key.chat_id,
+            "user_id": key.user_id,
+            "thread_id": key.thread_id or 0,
+            "business_connection_id": key.business_connection_id or "",
+            "destiny": key.destiny,
+        }
+
+    @staticmethod
+    def _condition(key: StorageKey):
+        values = PostgreSQLStorage._key(key)
         return (
-            key.bot_id,
-            key.chat_id,
-            key.user_id,
-            key.thread_id or 0,
-            key.business_connection_id or "",
-            key.destiny,
+            (fsm_states.c.bot_id == values["bot_id"])
+            & (fsm_states.c.chat_id == values["chat_id"])
+            & (fsm_states.c.user_id == values["user_id"])
+            & (fsm_states.c.thread_id == values["thread_id"])
+            & (fsm_states.c.business_connection_id == values["business_connection_id"])
+            & (fsm_states.c.destiny == values["destiny"])
         )
-
-    def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS fsm_states (
-                    bot_id INTEGER NOT NULL,
-                    chat_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    thread_id INTEGER NOT NULL DEFAULT 0,
-                    business_connection_id TEXT NOT NULL DEFAULT '',
-                    destiny TEXT NOT NULL DEFAULT 'default',
-                    state TEXT,
-                    data TEXT NOT NULL DEFAULT '{}',
-                    PRIMARY KEY (
-                        bot_id, chat_id, user_id, thread_id,
-                        business_connection_id, destiny
-                    )
-                )
-                """
-            )
-
-    def _write_state(self, key: StorageKey, state: str | None) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO fsm_states (
-                    bot_id, chat_id, user_id, thread_id,
-                    business_connection_id, destiny, state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT DO UPDATE SET state = excluded.state
-                """,
-                (*self._key(key), state),
-            )
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
         state_value = state.state if isinstance(state, State) else state
-        async with self._lock:
-            await asyncio.to_thread(self._write_state, key, state_value)
-
-    def _read_state(self, key: StorageKey) -> str | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT state FROM fsm_states
-                WHERE bot_id = ? AND chat_id = ? AND user_id = ?
-                  AND thread_id = ? AND business_connection_id = ? AND destiny = ?
-                """,
-                self._key(key),
-            ).fetchone()
-        return row[0] if row else None
+        statement = insert(fsm_states).values(**self._key(key), state=state_value)
+        statement = statement.on_conflict_do_update(
+            index_elements=[
+                fsm_states.c.bot_id,
+                fsm_states.c.chat_id,
+                fsm_states.c.user_id,
+                fsm_states.c.thread_id,
+                fsm_states.c.business_connection_id,
+                fsm_states.c.destiny,
+            ],
+            set_={"state": state_value},
+        )
+        async with self.engine.begin() as connection:
+            await connection.execute(statement)
 
     async def get_state(self, key: StorageKey) -> str | None:
-        async with self._lock:
-            return await asyncio.to_thread(self._read_state, key)
-
-    def _write_data(self, key: StorageKey, data: Mapping[str, Any]) -> None:
-        serialized = json.dumps(dict(data), ensure_ascii=False)
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO fsm_states (
-                    bot_id, chat_id, user_id, thread_id,
-                    business_connection_id, destiny, data
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT DO UPDATE SET data = excluded.data
-                """,
-                (*self._key(key), serialized),
-            )
+        async with self.engine.connect() as connection:
+            return await connection.scalar(select(fsm_states.c.state).where(self._condition(key)))
 
     async def set_data(self, key: StorageKey, data: Mapping[str, Any]) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._write_data, key, data)
-
-    def _read_data(self, key: StorageKey) -> dict[str, Any]:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT data FROM fsm_states
-                WHERE bot_id = ? AND chat_id = ? AND user_id = ?
-                  AND thread_id = ? AND business_connection_id = ? AND destiny = ?
-                """,
-                self._key(key),
-            ).fetchone()
-        return json.loads(row[0]) if row else {}
+        value = dict(data)
+        statement = insert(fsm_states).values(**self._key(key), data=value)
+        statement = statement.on_conflict_do_update(
+            index_elements=[
+                fsm_states.c.bot_id,
+                fsm_states.c.chat_id,
+                fsm_states.c.user_id,
+                fsm_states.c.thread_id,
+                fsm_states.c.business_connection_id,
+                fsm_states.c.destiny,
+            ],
+            set_={"data": value},
+        )
+        async with self.engine.begin() as connection:
+            await connection.execute(statement)
 
     async def get_data(self, key: StorageKey) -> dict[str, Any]:
-        async with self._lock:
-            return await asyncio.to_thread(self._read_data, key)
-
-    async def update_data(
-        self,
-        key: StorageKey,
-        data: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        async with self._lock:
-            current = await asyncio.to_thread(self._read_data, key)
-            current.update(data)
-            await asyncio.to_thread(self._write_data, key, current)
-            return current.copy()
+        async with self.engine.connect() as connection:
+            data = await connection.scalar(select(fsm_states.c.data).where(self._condition(key)))
+        return dict(data or {})
 
     async def close(self) -> None:
         return None

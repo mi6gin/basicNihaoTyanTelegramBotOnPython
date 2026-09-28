@@ -15,6 +15,9 @@ def main_menu_text(name: str, language: str) -> str:
 async def send_main_menu(message: Message, language: str) -> None:
     if message.from_user is None:
         return
+    if message.chat.type != "private":
+        await message.answer(translate("main.private_only", language))
+        return
     await message.answer(
         main_menu_text(message.from_user.first_name, language),
         reply_markup=main_menu_keyboard(message.from_user.id, language),

@@ -34,7 +34,7 @@ async def change_language(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     language = data.value
-    set_user_language(callback.from_user.id, language)
+    await set_user_language(callback.from_user.id, language)
     await edit_screen(
         callback,
         translate("main.welcome", language, name=callback.from_user.first_name),
