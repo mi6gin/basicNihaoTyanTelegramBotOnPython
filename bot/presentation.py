@@ -72,6 +72,9 @@ def format_journal_entry(item: dict[str, Any], language: str, position: int, cou
         kind = item.get("kind")
         if kind in {"news", "ad"}:
             lines.append(translate("admin.record_broadcast_kind", language, kind=translate(f"broadcast.{kind}", language)))
+        audience = item.get("audience")
+        if audience in {"all", "admins", "selected"}:
+            lines.append(translate("admin.record_broadcast_audience", language, audience=translate(f"broadcast.audience_{audience}", language)))
         if item.get("admin_id") is not None:
             lines.append(translate("admin.record_broadcast_admin", language, admin_id=item["admin_id"]))
         if event == "broadcast_started":

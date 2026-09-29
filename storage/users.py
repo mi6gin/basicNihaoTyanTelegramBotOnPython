@@ -88,3 +88,22 @@ async def get_broadcast_recipients(after_id: int, through_id: int, limit: int = 
             )
         ).scalars().all()
     return [int(user_id) for user_id in rows]
+
+
+async def get_broadcast_users_page(offset: int, limit: int = 8) -> tuple[list[tuple[int, str | None, str, str | None]], int]:
+    async with get_database_engine().connect() as connection:
+        count = int(await connection.scalar(select(func.count()).select_from(users)) or 0)
+        rows = (
+            await connection.execute(
+                select(users.c.telegram_id, users.c.username, users.c.first_name, users.c.last_name)
+                .order_by(users.c.last_seen_at.desc(), users.c.telegram_id.desc())
+                .limit(limit)
+                .offset(max(offset, 0))
+            )
+        ).all()
+    return [(int(row[0]), row[1], row[2], row[3]) for row in rows], count
+
+
+async def broadcast_user_exists(telegram_id: int) -> bool:
+    async with get_database_engine().connect() as connection:
+        return await connection.scalar(select(users.c.telegram_id).where(users.c.telegram_id == telegram_id)) is not None

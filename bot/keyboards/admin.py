@@ -30,6 +30,46 @@ def broadcast_menu_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup
     )
 
 
+def broadcast_audience_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=translate("broadcast.audience_all", language), callback_data=Callback("broadcastto", user_id, "all").pack())],
+            [InlineKeyboardButton(text=translate("broadcast.audience_admins", language), callback_data=Callback("broadcastto", user_id, "admins").pack())],
+            [InlineKeyboardButton(text=translate("broadcast.audience_selected", language), callback_data=Callback("broadcastto", user_id, "selected").pack())],
+            [InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("broadcastcancel", user_id).pack())],
+        ]
+    )
+
+
+def broadcast_users_keyboard(
+    user_id: int,
+    language: str,
+    users: list[tuple[int, str | None, str, str | None]],
+    selected_ids: set[int],
+    page: int,
+    count: int,
+    page_size: int = 8,
+) -> InlineKeyboardMarkup:
+    buttons = []
+    for telegram_id, username, first_name, last_name in users:
+        display_name = f"@{username}" if username else " ".join(filter(None, (first_name, last_name)))
+        display_name = display_name[:28] or str(telegram_id)
+        marker = "✅" if telegram_id in selected_ids else "▫️"
+        buttons.append(
+            [InlineKeyboardButton(text=f"{marker} {display_name} · {telegram_id}", callback_data=Callback("broadcastpick", user_id, str(telegram_id)).pack())]
+        )
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text=translate("button.newer", language), callback_data=Callback("broadcastpage", user_id, str(page - 1)).pack()))
+    if (page + 1) * page_size < count:
+        navigation.append(InlineKeyboardButton(text=translate("button.older", language), callback_data=Callback("broadcastpage", user_id, str(page + 1)).pack()))
+    if navigation:
+        buttons.append(navigation)
+    buttons.append([InlineKeyboardButton(text=translate("broadcast.users_ready", language), callback_data=Callback("broadcastready", user_id).pack())])
+    buttons.append([InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("broadcastcancel", user_id).pack())])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def broadcast_cancel_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

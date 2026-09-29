@@ -14,20 +14,24 @@ from bot.callbacks import Callback
 from bot.common import authorize_callback, edit_screen, sync_user
 from bot.keyboards.admin import (
     broadcast_ad_keyboard,
+    broadcast_audience_keyboard,
     broadcast_cancel_keyboard,
     broadcast_confirm_keyboard,
     broadcast_menu_keyboard,
+    broadcast_users_keyboard,
 )
 from bot.states import AdminState
 from localization import translate
 from settings import settings
-from storage.users import get_broadcast_snapshot
+from storage.users import broadcast_user_exists, get_broadcast_snapshot, get_broadcast_users_page
 
 logger = logging.getLogger(__name__)
 router = Router(name="broadcast")
 MAX_BROADCAST_TEXT_LENGTH = 4000
 MAX_BUTTON_TEXT_LENGTH = 64
 MAX_BUTTON_URL_LENGTH = 2048
+MAX_SELECTED_USERS = 100
+SELECTOR_PAGE_SIZE = 8
 
 
 async def authorize_broadcast_callback(callback: CallbackQuery) -> tuple[str, Callback] | None:
@@ -64,9 +68,51 @@ def valid_button_url(value: str) -> bool:
         return False
 
 
+def selected_user_ids(draft: dict) -> tuple[int, ...]:
+    values = draft.get("selected_ids", [])
+    if not isinstance(values, list):
+        return ()
+    return tuple(sorted({value for value in values if isinstance(value, int) and value > 0}))
+
+
+async def broadcast_recipients(draft: dict) -> tuple[int, int, tuple[int, ...] | None]:
+    audience = draft.get("audience")
+    if audience == "all":
+        count, through_id = await get_broadcast_snapshot()
+        return count, through_id, None
+    if audience == "admins":
+        ids = tuple(sorted(settings.admin_ids))
+        return len(ids), 0, ids
+    if audience == "selected":
+        ids = selected_user_ids(draft)
+        return len(ids), 0, ids
+    return 0, 0, ()
+
+
+async def show_user_selector(callback: CallbackQuery, state: FSMContext, language: str, requested_page: int) -> None:
+    draft = await state.get_data()
+    _, count = await get_broadcast_users_page(0, SELECTOR_PAGE_SIZE)
+    if count == 0:
+        await state.clear()
+        await edit_screen(callback, translate("broadcast.no_users", language), broadcast_menu_keyboard(callback.from_user.id, language))
+        return
+    page = min(max(requested_page, 0), (count - 1) // SELECTOR_PAGE_SIZE)
+    rows, _ = await get_broadcast_users_page(page * SELECTOR_PAGE_SIZE, SELECTOR_PAGE_SIZE)
+    selected = set(selected_user_ids(draft))
+    await state.update_data(selector_page=page)
+    await edit_screen(
+        callback,
+        translate(
+            "broadcast.select_users", language,
+            selected=len(selected), limit=MAX_SELECTED_USERS, page=page + 1, pages=(count - 1) // SELECTOR_PAGE_SIZE + 1,
+        ),
+        broadcast_users_keyboard(callback.from_user.id, language, rows, selected, page, count, SELECTOR_PAGE_SIZE),
+    )
+
+
 async def show_broadcast_preview(message: Message, state: FSMContext, language: str) -> None:
     draft = await state.get_data()
-    count, _ = await get_broadcast_snapshot()
+    count, _, _ = await broadcast_recipients(draft)
     if count == 0:
         await state.clear()
         await message.answer(translate("broadcast.no_users", language), reply_markup=broadcast_menu_keyboard(message.from_user.id, language))
@@ -80,7 +126,7 @@ async def show_broadcast_preview(message: Message, state: FSMContext, language: 
         return
     await state.set_state(AdminState.waiting_for_broadcast_confirmation)
     await message.answer(
-        translate("broadcast.confirm", language, count=count),
+        translate("broadcast.confirm", language, count=count, audience=translate(f"broadcast.audience_{draft['audience']}", language)),
         reply_markup=broadcast_confirm_keyboard(message.from_user.id, language),
     )
 
@@ -109,14 +155,113 @@ async def start_broadcast_draft(callback: CallbackQuery, state: FSMContext) -> N
     language, data = authorized
     kind = "ad" if data.action == "broadcastad" else "news"
     await state.clear()
+    await state.set_state(AdminState.waiting_for_broadcast_audience)
+    await state.update_data(kind=kind, selected_ids=[])
+    await edit_screen(
+        callback,
+        translate("broadcast.audience_prompt", language),
+        broadcast_audience_keyboard(callback.from_user.id, language),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastto:"))
+async def choose_broadcast_audience(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_audience.state or data.value not in {"all", "admins", "selected"}:
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    await state.update_data(audience=data.value)
+    if data.value == "selected":
+        await state.set_state(AdminState.waiting_for_broadcast_users)
+        await show_user_selector(callback, state, language, 0)
+    else:
+        await state.set_state(AdminState.waiting_for_broadcast_text)
+        await edit_screen(
+            callback,
+            translate("broadcast.text_prompt", language, limit=MAX_BROADCAST_TEXT_LENGTH),
+            broadcast_cancel_keyboard(callback.from_user.id, language),
+        )
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastpage:"))
+async def change_broadcast_user_page(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state:
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    page = int(data.value) if data.value and data.value.isdigit() else 0
+    await show_user_selector(callback, state, language, page)
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastpick:"))
+async def toggle_broadcast_user(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state or not data.value or not data.value.isdigit():
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    user_id = int(data.value)
+    if not await broadcast_user_exists(user_id):
+        await callback.answer(translate("error.not_found", language), show_alert=True)
+        return
+    draft = await state.get_data()
+    selected = set(selected_user_ids(draft))
+    if user_id in selected:
+        selected.remove(user_id)
+    elif len(selected) >= MAX_SELECTED_USERS:
+        await callback.answer(translate("broadcast.too_many_users", language, limit=MAX_SELECTED_USERS), show_alert=True)
+        return
+    else:
+        selected.add(user_id)
+    await state.update_data(selected_ids=sorted(selected))
+    await show_user_selector(callback, state, language, int(draft.get("selector_page", 0)))
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastready:"))
+async def finish_broadcast_users(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, _ = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state:
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    if not selected_user_ids(await state.get_data()):
+        await callback.answer(translate("broadcast.select_one", language), show_alert=True)
+        return
     await state.set_state(AdminState.waiting_for_broadcast_text)
-    await state.update_data(kind=kind)
     await edit_screen(
         callback,
         translate("broadcast.text_prompt", language, limit=MAX_BROADCAST_TEXT_LENGTH),
         broadcast_cancel_keyboard(callback.from_user.id, language),
     )
     await callback.answer()
+
+
+@router.message(AdminState.waiting_for_broadcast_audience)
+async def remind_broadcast_audience(message: Message) -> None:
+    language = await authorize_broadcast_message(message)
+    if language is not None:
+        await message.answer(translate("broadcast.audience_prompt", language), reply_markup=broadcast_audience_keyboard(message.from_user.id, language))
+
+
+@router.message(AdminState.waiting_for_broadcast_users)
+async def remind_broadcast_users(message: Message) -> None:
+    language = await authorize_broadcast_message(message)
+    if language is not None:
+        await message.answer(translate("broadcast.users_hint", language), reply_markup=broadcast_cancel_keyboard(message.from_user.id, language))
 
 
 @router.message(AdminState.waiting_for_broadcast_text, F.text)
@@ -217,7 +362,7 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
     draft = await state.get_data()
-    if draft.get("kind") not in {"news", "ad"} or not isinstance(draft.get("text"), str):
+    if draft.get("kind") not in {"news", "ad"} or draft.get("audience") not in {"all", "admins", "selected"} or not isinstance(draft.get("text"), str):
         await state.clear()
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
@@ -230,7 +375,7 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot
         return
     await broadcast_lock.acquire()
     try:
-        count, through_id = await get_broadcast_snapshot()
+        count, through_id, explicit_ids = await broadcast_recipients(draft)
         await state.clear()
         if count == 0:
             await callback.answer(translate("broadcast.no_users", language), show_alert=True)
@@ -238,7 +383,10 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot
         await callback.answer()
         await edit_screen(callback, translate("broadcast.sending", language, count=count), broadcast_menu_keyboard(callback.from_user.id, language))
         markup = broadcast_ad_keyboard(draft["button_text"], draft["url"]) if draft["kind"] == "ad" else None
-        result = await deliver_broadcast(bot, callback.from_user.id, draft["kind"], draft["text"], through_id, count, markup)
+        result = await deliver_broadcast(
+            bot, callback.from_user.id, draft["kind"], draft["text"], through_id, count,
+            draft["audience"], explicit_ids, markup,
+        )
         await bot.send_message(
             callback.from_user.id,
             translate(

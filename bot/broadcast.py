@@ -23,6 +23,17 @@ class BroadcastResult:
     failed: int
 
 
+async def recipient_batches(through_id: int, explicit_ids: tuple[int, ...] | None):
+    if explicit_ids is not None:
+        for offset in range(0, len(explicit_ids), 200):
+            yield explicit_ids[offset : offset + 200]
+        return
+    last_id = 0
+    while recipients := await get_broadcast_recipients(last_id, through_id):
+        yield recipients
+        last_id = recipients[-1]
+
+
 async def deliver_broadcast(
     bot: Bot,
     admin_id: int,
@@ -30,14 +41,14 @@ async def deliver_broadcast(
     text: str,
     through_id: int,
     target_count: int,
+    audience: str,
+    explicit_ids: tuple[int, ...] | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> BroadcastResult:
     sent = unavailable = failed = 0
-    last_id = 0
-    record_event("broadcast_started", admin_id=admin_id, kind=kind, recipients=target_count)
-    while recipients := await get_broadcast_recipients(last_id, through_id):
+    record_event("broadcast_started", admin_id=admin_id, kind=kind, audience=audience, recipients=target_count)
+    async for recipients in recipient_batches(through_id, explicit_ids):
         for user_id in recipients:
-            last_id = user_id
             for attempt in range(3):
                 try:
                     await bot.send_message(user_id, text, reply_markup=reply_markup)
@@ -62,6 +73,7 @@ async def deliver_broadcast(
         "broadcast_finished",
         admin_id=admin_id,
         kind=kind,
+        audience=audience,
         sent=result.sent,
         unavailable=result.unavailable,
         failed=result.failed,
