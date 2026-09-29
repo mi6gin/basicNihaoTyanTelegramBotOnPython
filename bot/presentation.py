@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from bot.constants import CATEGORIES
+from bot.constants import LEGACY_CATEGORIES
 from localization import translate
 from storage.models import Appeal, AppealMessage
 
@@ -11,7 +11,7 @@ def appeal_status(appeal: Appeal, language: str) -> str:
 
 
 def appeal_category(category: str, language: str) -> str:
-    safe_category = category if category in CATEGORIES else "other"
+    safe_category = category if category in LEGACY_CATEGORIES else "other"
     return translate(f"category.{safe_category}", language)
 
 
@@ -51,7 +51,7 @@ def format_journal_entry(item: dict[str, Any], language: str, position: int, cou
         lines.append(translate("admin.record_user", language, name=name, username=username, user_id=item["user_id"]))
     if item.get("appeal_id") is not None:
         lines.append(translate("admin.record_appeal", language, appeal_id=item["appeal_id"]))
-    if item.get("category") in CATEGORIES:
+    if item.get("category") in LEGACY_CATEGORIES:
         lines.append(translate("admin.record_category", language, category=appeal_category(item["category"], language)))
     if item.get("new_status"):
         lines.append(translate("admin.record_status", language, old=item.get("old_status") or "—", new=item["new_status"]))

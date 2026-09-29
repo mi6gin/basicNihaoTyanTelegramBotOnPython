@@ -1,5 +1,6 @@
 """Private daily activity journals for incoming Telegram messages and bot actions."""
 
+import asyncio
 import json
 import logging
 import os
@@ -7,13 +8,14 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from aiogram import BaseMiddleware
-from aiogram.types import Message, Update
+from aiogram import BaseMiddleware, Bot
+from aiogram.types import BufferedInputFile, Message, Update
 from sqlalchemy.exc import SQLAlchemyError
 
 from bot.constants import CATEGORIES
@@ -28,6 +30,8 @@ FILE_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
 MAX_DAILY_FILES = 30
 JOURNAL_DIRECTORY = DATA_DIRECTORY / "logs"
 _active_journal: "DailyJournal | None" = None
+logger = logging.getLogger(__name__)
+MAX_ERROR_FILE_BYTES = 45 * 1024 * 1024
 
 
 class DailyJournal:
@@ -223,13 +227,13 @@ class IncomingUpdateMiddleware(BaseMiddleware):
                             sender.last_name,
                             telegram_language(sender.language_code),
                         )
-                    except SQLAlchemyError as error:
-                        record_event("error", details=f"Could not save user {message.from_user.id}: {error}")
+                    except SQLAlchemyError:
+                        logger.exception("Could not save user %s", message.from_user.id)
                 if message.chat.type != "private":
                     try:
                         await save_chat(message.chat)
-                    except SQLAlchemyError as error:
-                        record_event("error", details=f"Could not save chat {message.chat.id}: {error}")
+                    except SQLAlchemyError:
+                        logger.exception("Could not save chat %s", message.chat.id)
         membership = event.my_chat_member
         if membership is not None:
             chat = membership.chat
@@ -251,8 +255,8 @@ class IncomingUpdateMiddleware(BaseMiddleware):
             if chat.type != "private":
                 try:
                     await save_chat(chat, new_status)
-                except SQLAlchemyError as error:
-                    record_event("error", details=f"Could not save chat {chat.id}: {error}")
+                except SQLAlchemyError:
+                    logger.exception("Could not save chat %s", chat.id)
         return await handler(event, data)
 
 
@@ -261,9 +265,70 @@ class JournalErrorHandler(logging.Handler):
         super().__init__(level=logging.ERROR)
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.name == __name__:
-            return
         try:
             record_event("error", logger=record.name, level=record.levelname, details=self.format(record))
         except Exception:
             self.handleError(record)
+
+
+class AdminErrorHandler(logging.Handler):
+    """Send each error log record to administrators as a text document."""
+
+    def __init__(self, bot: Bot, admin_ids: frozenset[int]) -> None:
+        super().__init__(level=logging.ERROR)
+        self.bot = bot
+        self.admin_ids = tuple(sorted(admin_ids))
+        self.loop = asyncio.get_running_loop()
+        self.queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self.worker = self.loop.create_task(self._send_reports())
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not self.admin_ids:
+            return
+        try:
+            timestamp = datetime.fromtimestamp(record.created, timezone.utc).astimezone(TIMEZONE)
+            filename = f"error-{timestamp:%Y%m%d-%H%M%S}-{uuid4().hex[:8]}.txt"
+            report = (
+                f"Time: {timestamp.isoformat(timespec='seconds')}\n"
+                f"Level: {record.levelname}\n"
+                f"Logger: {record.name}\n\n"
+                f"{self.format(record)}\n"
+            ).replace(settings.bot_token, "[REDACTED_BOT_TOKEN]")
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, (filename, report))
+        except Exception:
+            self.handleError(record)
+
+    async def _send_reports(self) -> None:
+        while True:
+            filename, report = await self.queue.get()
+            try:
+                content = report.encode("utf-8", errors="replace")
+                if len(content) > MAX_ERROR_FILE_BYTES:
+                    content = content[: MAX_ERROR_FILE_BYTES - 100].decode("utf-8", errors="ignore").encode("utf-8")
+                    content += b"\n\n[Report truncated to fit Telegram's document limit.]\n"
+                for admin_id in self.admin_ids:
+                    try:
+                        await self.bot.send_document(
+                            admin_id,
+                            BufferedInputFile(content, filename=filename),
+                            caption="Ошибка бота. Подробности в файле.",
+                        )
+                    except Exception as error:
+                        # Logging here would create another error notification.
+                        record_event("error", logger=__name__, details=f"Could not send error report to admin {admin_id}: {error}")
+                        sys.stderr.write(f"Could not send error report to admin {admin_id}: {error}\n")
+            finally:
+                self.queue.task_done()
+
+    async def shutdown(self) -> None:
+        await asyncio.sleep(0)
+        try:
+            await asyncio.wait_for(self.queue.join(), timeout=20)
+        except TimeoutError:
+            sys.stderr.write("Timed out while sending pending error reports\n")
+        finally:
+            self.worker.cancel()
+            try:
+                await self.worker
+            except asyncio.CancelledError:
+                pass
