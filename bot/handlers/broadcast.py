@@ -75,6 +75,13 @@ def selected_user_ids(draft: dict) -> tuple[int, ...]:
     return tuple(sorted({value for value in values if isinstance(value, int) and value > 0}))
 
 
+def is_current_broadcast_screen(callback: CallbackQuery, draft: dict, *, confirmation: bool = False) -> bool:
+    if not isinstance(callback.message, Message):
+        return False
+    key = "confirm_message_id" if confirmation else "screen_message_id"
+    return draft.get(key) == callback.message.message_id
+
+
 async def broadcast_recipients(draft: dict) -> tuple[int, int, tuple[int, ...] | None]:
     audience = draft.get("audience")
     if audience == "all":
@@ -99,8 +106,7 @@ async def show_user_selector(callback: CallbackQuery, state: FSMContext, languag
     page = min(max(requested_page, 0), (count - 1) // SELECTOR_PAGE_SIZE)
     rows, _ = await get_broadcast_users_page(page * SELECTOR_PAGE_SIZE, SELECTOR_PAGE_SIZE)
     selected = set(selected_user_ids(draft))
-    await state.update_data(selector_page=page)
-    await edit_screen(
+    screen_message_id = await edit_screen(
         callback,
         translate(
             "broadcast.select_users", language,
@@ -108,6 +114,7 @@ async def show_user_selector(callback: CallbackQuery, state: FSMContext, languag
         ),
         broadcast_users_keyboard(callback.from_user.id, language, rows, selected, page, count, SELECTOR_PAGE_SIZE),
     )
+    await state.update_data(selector_page=page, screen_message_id=screen_message_id)
 
 
 async def show_broadcast_preview(message: Message, state: FSMContext, language: str) -> None:
@@ -124,11 +131,12 @@ async def show_broadcast_preview(message: Message, state: FSMContext, language: 
     except TelegramBadRequest:
         await message.answer(translate("broadcast.preview_failed", language))
         return
-    await state.set_state(AdminState.waiting_for_broadcast_confirmation)
-    await message.answer(
+    confirmation = await message.answer(
         translate("broadcast.confirm", language, count=count, audience=translate(f"broadcast.audience_{draft['audience']}", language)),
         reply_markup=broadcast_confirm_keyboard(message.from_user.id, language),
     )
+    await state.set_state(AdminState.waiting_for_broadcast_confirmation)
+    await state.update_data(confirm_message_id=confirmation.message_id)
 
 
 @router.callback_query(lambda query: (query.data or "").startswith("broadcast:"))
@@ -156,12 +164,12 @@ async def start_broadcast_draft(callback: CallbackQuery, state: FSMContext) -> N
     kind = "ad" if data.action == "broadcastad" else "news"
     await state.clear()
     await state.set_state(AdminState.waiting_for_broadcast_audience)
-    await state.update_data(kind=kind, selected_ids=[])
-    await edit_screen(
+    screen_message_id = await edit_screen(
         callback,
         translate("broadcast.audience_prompt", language),
         broadcast_audience_keyboard(callback.from_user.id, language),
     )
+    await state.update_data(kind=kind, selected_ids=[], screen_message_id=screen_message_id)
     await callback.answer()
 
 
@@ -171,7 +179,11 @@ async def choose_broadcast_audience(callback: CallbackQuery, state: FSMContext) 
     if authorized is None:
         return
     language, data = authorized
-    if await state.get_state() != AdminState.waiting_for_broadcast_audience.state or data.value not in {"all", "admins", "selected"}:
+    if (
+        await state.get_state() != AdminState.waiting_for_broadcast_audience.state
+        or not is_current_broadcast_screen(callback, await state.get_data())
+        or data.value not in {"all", "admins", "selected"}
+    ):
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
     await state.update_data(audience=data.value)
@@ -180,11 +192,12 @@ async def choose_broadcast_audience(callback: CallbackQuery, state: FSMContext) 
         await show_user_selector(callback, state, language, 0)
     else:
         await state.set_state(AdminState.waiting_for_broadcast_text)
-        await edit_screen(
+        screen_message_id = await edit_screen(
             callback,
             translate("broadcast.text_prompt", language, limit=MAX_BROADCAST_TEXT_LENGTH),
             broadcast_cancel_keyboard(callback.from_user.id, language),
         )
+        await state.update_data(screen_message_id=screen_message_id)
     await callback.answer()
 
 
@@ -194,7 +207,7 @@ async def change_broadcast_user_page(callback: CallbackQuery, state: FSMContext)
     if authorized is None:
         return
     language, data = authorized
-    if await state.get_state() != AdminState.waiting_for_broadcast_users.state:
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state or not is_current_broadcast_screen(callback, await state.get_data()):
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
     page = int(data.value) if data.value and data.value.isdigit() else 0
@@ -208,7 +221,11 @@ async def toggle_broadcast_user(callback: CallbackQuery, state: FSMContext) -> N
     if authorized is None:
         return
     language, data = authorized
-    if await state.get_state() != AdminState.waiting_for_broadcast_users.state or not data.value or not data.value.isdigit():
+    if (
+        await state.get_state() != AdminState.waiting_for_broadcast_users.state
+        or not is_current_broadcast_screen(callback, await state.get_data())
+        or not data.value or not data.value.isdigit()
+    ):
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
     user_id = int(data.value)
@@ -235,18 +252,19 @@ async def finish_broadcast_users(callback: CallbackQuery, state: FSMContext) -> 
     if authorized is None:
         return
     language, _ = authorized
-    if await state.get_state() != AdminState.waiting_for_broadcast_users.state:
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state or not is_current_broadcast_screen(callback, await state.get_data()):
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
     if not selected_user_ids(await state.get_data()):
         await callback.answer(translate("broadcast.select_one", language), show_alert=True)
         return
     await state.set_state(AdminState.waiting_for_broadcast_text)
-    await edit_screen(
+    screen_message_id = await edit_screen(
         callback,
         translate("broadcast.text_prompt", language, limit=MAX_BROADCAST_TEXT_LENGTH),
         broadcast_cancel_keyboard(callback.from_user.id, language),
     )
+    await state.update_data(screen_message_id=screen_message_id)
     await callback.answer()
 
 
@@ -342,6 +360,23 @@ async def cancel_broadcast_draft(callback: CallbackQuery, state: FSMContext) -> 
     if authorized is None:
         return
     language, _ = authorized
+    current_state = await state.get_state()
+    if current_state not in {
+        AdminState.waiting_for_broadcast_audience.state,
+        AdminState.waiting_for_broadcast_users.state,
+        AdminState.waiting_for_broadcast_text.state,
+        AdminState.waiting_for_broadcast_button.state,
+        AdminState.waiting_for_broadcast_url.state,
+        AdminState.waiting_for_broadcast_confirmation.state,
+    }:
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    draft = await state.get_data()
+    if not is_current_broadcast_screen(
+        callback, draft, confirmation=current_state == AdminState.waiting_for_broadcast_confirmation.state,
+    ):
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
     await state.clear()
     count, _ = await get_broadcast_snapshot()
     await edit_screen(
@@ -362,7 +397,14 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return
     draft = await state.get_data()
-    if draft.get("kind") not in {"news", "ad"} or draft.get("audience") not in {"all", "admins", "selected"} or not isinstance(draft.get("text"), str):
+    if not is_current_broadcast_screen(callback, draft, confirmation=True):
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    if (
+        draft.get("kind") not in {"news", "ad"}
+        or draft.get("audience") not in {"all", "admins", "selected"}
+        or not isinstance(draft.get("text"), str)
+    ):
         await state.clear()
         await callback.answer(translate("broadcast.expired", language), show_alert=True)
         return

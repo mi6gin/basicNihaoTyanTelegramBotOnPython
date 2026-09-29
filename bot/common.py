@@ -16,14 +16,20 @@ async def sync_user(user: User) -> str:
     )
 
 
-async def authorize_callback(callback: CallbackQuery) -> tuple[str, Callback] | None:
+async def authorize_callback(callback: CallbackQuery, *, allow_group: bool = False) -> tuple[str, Callback] | None:
     language = await sync_user(callback.from_user)
-    if not isinstance(callback.message, Message) or callback.message.chat.type != "private":
-        await callback.answer(translate("error.private_chat_only", language), show_alert=True)
-        return None
     data = Callback.unpack(callback.data)
     if data is None or data.owner_id != callback.from_user.id:
         await callback.answer(translate("error.foreign_menu", language), show_alert=True)
+        return None
+    if not isinstance(callback.message, Message):
+        await callback.answer(translate("error.private_chat_only", language), show_alert=True)
+        return None
+    chat_type = callback.message.chat.type
+    if chat_type != "private" and not (
+        allow_group and chat_type in {"group", "supergroup"} and data.action in {"main", "language", "setlang"}
+    ):
+        await callback.answer(translate("error.private_chat_only", language), show_alert=True)
         return None
     return language, data
 
@@ -32,11 +38,14 @@ async def edit_screen(
     callback: CallbackQuery,
     screen_text: str,
     keyboard: InlineKeyboardMarkup,
-) -> None:
+) -> int | None:
     if not isinstance(callback.message, Message):
-        return
+        return None
     try:
-        await callback.message.edit_text(screen_text, reply_markup=keyboard)
+        edited = await callback.message.edit_text(screen_text, reply_markup=keyboard)
+        return edited.message_id
     except TelegramBadRequest as error:
         if "message is not modified" not in str(error).lower():
-            await callback.message.answer(screen_text, reply_markup=keyboard)
+            sent = await callback.message.answer(screen_text, reply_markup=keyboard)
+            return sent.message_id
+        return callback.message.message_id

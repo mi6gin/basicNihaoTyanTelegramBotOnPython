@@ -1,5 +1,6 @@
 {
   "main.welcome": "Hello, {name}! 👋\n\nWelcome. Choose a section:",
+  "main.group_welcome": "Hello, {name}! 👋\n\nOnly you can use this menu. You can change your language here; support and the admin panel are available only in a private chat with the bot.",
   "main.support": "🆘 Support",
   "main.language": "🌐 Change language",
   "main.admin": "⚙️ Admin panel",
@@ -15,6 +16,7 @@
   "support.view": "Request #{number}\nCategory: {category}\nStatus: {status}\n\nConversation:\n{dialog}",
   "support.choose_category": "What is your request about? Choose a category:",
   "support.choose_category_again": "The category could not be determined. Please start creating the request again.",
+  "support.expired": "This request menu is no longer active. Open support again.",
   "support.prompt": "Category: {category}\n\nDescribe the issue in text or send a photo/document with a caption.\n\nMaximum: {limit} characters.",
   "support.too_long": "The request is too long. Maximum: {limit} characters.",
   "support.empty_text": "The request text cannot be empty.",
@@ -141,6 +143,7 @@
   "admin.empty_answer": "The reply cannot be empty.",
   "admin.text_only": "Please send the reply as one text message.",
   "admin.already_answered": "The request is closed or missing.",
+  "admin.answer_expired": "This reply prompt is no longer active. Open the request again.",
   "admin.answer_saved": "The reply to request #{number} was saved and sent to the user.",
   "admin.answer_saved_no_notification": "The reply to request #{number} was saved, but the user could not be notified.",
   "admin.denied": "Access denied.",

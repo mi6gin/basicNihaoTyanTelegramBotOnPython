@@ -12,7 +12,7 @@ router = Router(name="language")
 
 @router.callback_query(lambda query: (query.data or "").startswith("language:"))
 async def choose_language(callback: CallbackQuery) -> None:
-    authorized = await authorize_callback(callback)
+    authorized = await authorize_callback(callback, allow_group=True)
     if authorized is None:
         return
     language, _ = authorized
@@ -26,7 +26,7 @@ async def choose_language(callback: CallbackQuery) -> None:
 
 @router.callback_query(lambda query: (query.data or "").startswith("setlang:"))
 async def change_language(callback: CallbackQuery) -> None:
-    authorized = await authorize_callback(callback)
+    authorized = await authorize_callback(callback, allow_group=True)
     if authorized is None:
         return
     _, data = authorized
@@ -35,9 +35,10 @@ async def change_language(callback: CallbackQuery) -> None:
         return
     language = data.value
     await set_user_language(callback.from_user.id, language)
+    private_chat = callback.message.chat.type == "private"
     await edit_screen(
         callback,
-        translate("main.welcome", language, name=callback.from_user.first_name),
-        main_menu_keyboard(callback.from_user.id, language),
+        translate("main.welcome" if private_chat else "main.group_welcome", language, name=callback.from_user.first_name),
+        main_menu_keyboard(callback.from_user.id, language, private_chat=private_chat),
     )
     await callback.answer()

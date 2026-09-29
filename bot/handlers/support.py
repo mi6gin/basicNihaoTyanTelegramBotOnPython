@@ -134,12 +134,13 @@ async def request_appeal_text(callback: CallbackQuery, state: FSMContext) -> Non
         return
     language, _ = authorized
     await state.clear()
-    await edit_screen(
+    prompt_message_id = await edit_screen(
         callback,
         translate("support.choose_category", language),
         category_keyboard(callback.from_user.id, language),
     )
     await state.set_state(SupportState.waiting_for_category)
+    await state.update_data(prompt_message_id=prompt_message_id)
     await callback.answer()
 
 
@@ -149,10 +150,14 @@ async def choose_appeal_category(callback: CallbackQuery, state: FSMContext) -> 
     if authorized is None:
         return
     language, data = authorized
+    state_data = await state.get_data()
+    if await state.get_state() != SupportState.waiting_for_category.state or state_data.get("prompt_message_id") != callback.message.message_id:
+        await callback.answer(translate("support.expired", language), show_alert=True)
+        return
     if data.value not in CATEGORIES:
         await callback.answer(translate("error.not_found", language), show_alert=True)
         return
-    await edit_screen(
+    prompt_message_id = await edit_screen(
         callback,
         translate("support.prompt", language, category=appeal_category(data.value, language), limit=MAX_APPEAL_LENGTH),
         cancel_keyboard(callback.from_user.id, language),
@@ -160,7 +165,7 @@ async def choose_appeal_category(callback: CallbackQuery, state: FSMContext) -> 
     await state.set_state(SupportState.waiting_for_text)
     await state.update_data(
         category=data.value,
-        prompt_message_id=callback.message.message_id if isinstance(callback.message, Message) else None,
+        prompt_message_id=prompt_message_id,
     )
     await callback.answer()
 
@@ -171,6 +176,14 @@ async def cancel_appeal(callback: CallbackQuery, state: FSMContext, bot: Bot) ->
     if authorized is None:
         return
     language, _ = authorized
+    state_data = await state.get_data()
+    if await state.get_state() not in {
+        SupportState.waiting_for_category.state,
+        SupportState.waiting_for_text.state,
+        SupportState.waiting_for_followup.state,
+    } or state_data.get("prompt_message_id") != callback.message.message_id:
+        await callback.answer(translate("support.expired", language), show_alert=True)
+        return
     await state.clear()
     if isinstance(callback.message, Message):
         await callback.message.delete()
@@ -183,6 +196,10 @@ async def receive_appeal(message: Message, state: FSMContext, bot: Bot) -> None:
     if message.from_user is None:
         return
     language = await sync_user(message.from_user)
+    if message.chat.type != "private":
+        await state.clear()
+        await message.answer(translate("error.private_chat_only", language))
+        return
     content = message_content(message, language)
     if content is None:
         await message.answer(translate("support.unsupported_attachment", language))
@@ -248,13 +265,13 @@ async def request_followup(callback: CallbackQuery, state: FSMContext) -> None:
     if appeal is None or appeal.workflow_status == "closed":
         await callback.answer(translate("support.closed", language), show_alert=True)
         return
-    await edit_screen(
+    prompt_message_id = await edit_screen(
         callback,
         translate("support.followup_prompt", language, number=appeal.id, limit=MAX_APPEAL_LENGTH),
         cancel_keyboard(callback.from_user.id, language),
     )
     await state.set_state(SupportState.waiting_for_followup)
-    await state.update_data(appeal_id=appeal.id)
+    await state.update_data(appeal_id=appeal.id, prompt_message_id=prompt_message_id)
     await callback.answer()
 
 
@@ -263,6 +280,10 @@ async def receive_followup(message: Message, state: FSMContext, bot: Bot) -> Non
     if message.from_user is None:
         return
     language = await sync_user(message.from_user)
+    if message.chat.type != "private":
+        await state.clear()
+        await message.answer(translate("error.private_chat_only", language))
+        return
     content = message_content(message, language)
     if content is None:
         await message.answer(translate("support.unsupported_attachment", language))

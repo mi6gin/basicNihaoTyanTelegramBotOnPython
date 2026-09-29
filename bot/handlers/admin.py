@@ -390,13 +390,13 @@ async def request_admin_answer(callback: CallbackQuery, state: FSMContext) -> No
     if appeal is None or appeal.workflow_status == "closed":
         await callback.answer(translate("admin.already_answered", language), show_alert=True)
         return
-    await edit_screen(
+    prompt_message_id = await edit_screen(
         callback,
         translate("admin.answer_prompt", language, number=appeal.id, limit=MAX_ANSWER_LENGTH),
         admin_cancel_keyboard(callback.from_user.id, language, appeal.id),
     )
     await state.set_state(AdminState.waiting_for_answer)
-    await state.update_data(appeal_id=appeal.id, prompt_message_id=callback.message.message_id if isinstance(callback.message, Message) else None)
+    await state.update_data(appeal_id=appeal.id, prompt_message_id=prompt_message_id)
     await callback.answer()
 
 
@@ -406,6 +406,13 @@ async def cancel_admin_answer(callback: CallbackQuery, state: FSMContext) -> Non
     if authorized is None:
         return
     language, data = authorized
+    if await state.get_state() != AdminState.waiting_for_answer.state:
+        await callback.answer(translate("admin.answer_expired", language), show_alert=True)
+        return
+    state_data = await state.get_data()
+    if str(state_data.get("appeal_id")) != data.value or state_data.get("prompt_message_id") != callback.message.message_id:
+        await callback.answer(translate("admin.answer_expired", language), show_alert=True)
+        return
     await state.clear()
     appeal_id = int(data.value) if data.value and data.value.isdigit() else 0
     appeal = await get_admin_appeal(appeal_id)
@@ -488,7 +495,9 @@ async def receive_admin_answer(message: Message, state: FSMContext, bot: Bot) ->
 @router.message(AdminState.waiting_for_answer)
 async def reject_admin_attachment(message: Message) -> None:
     if message.from_user is not None:
-        await message.answer(translate("admin.text_only", await sync_user(message.from_user)))
+        language = await sync_user(message.from_user)
+        key = "admin.text_only" if message.chat.type == "private" else "error.private_chat_only"
+        await message.answer(translate(key, language))
 
 
 @router.callback_query(lambda query: (query.data or "").startswith("adminclose:"))
