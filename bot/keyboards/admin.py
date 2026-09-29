@@ -14,9 +14,41 @@ def admin_menu_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=translate("admin.logs", language), callback_data=Callback("adminlogs", user_id, "0").pack())],
             [InlineKeyboardButton(text=translate("admin.users", language), callback_data=Callback("adminusers", user_id, "0").pack())],
             [InlineKeyboardButton(text=translate("admin.chats", language), callback_data=Callback("admingroups", user_id, "0").pack())],
+            [InlineKeyboardButton(text=translate("broadcast.menu_button", language), callback_data=Callback("broadcast", user_id).pack())],
             [InlineKeyboardButton(text=translate("button.back", language), callback_data=Callback("main", user_id).pack())],
         ]
     )
+
+
+def broadcast_menu_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=translate("broadcast.news", language), callback_data=Callback("broadcastnews", user_id).pack())],
+            [InlineKeyboardButton(text=translate("broadcast.ad", language), callback_data=Callback("broadcastad", user_id).pack())],
+            [InlineKeyboardButton(text=translate("button.back", language), callback_data=Callback("admin", user_id).pack())],
+        ]
+    )
+
+
+def broadcast_cancel_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("broadcastcancel", user_id).pack())]
+        ]
+    )
+
+
+def broadcast_confirm_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=translate("broadcast.send", language), callback_data=Callback("broadcastsend", user_id).pack())],
+            [InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("broadcastcancel", user_id).pack())],
+        ]
+    )
+
+
+def broadcast_ad_keyboard(button_text: str, url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=button_text, url=url)]])
 
 
 def admin_logs_keyboard(user_id: int, language: str, dates: list[str], offset: int, page_size: int = 7) -> InlineKeyboardMarkup:

@@ -32,7 +32,10 @@ def format_dialog(messages: list[AppealMessage], language: str, max_length: int 
 
 def format_journal_entry(item: dict[str, Any], language: str, position: int, count: int) -> str:
     event = item.get("event", "unknown")
-    known_events = {"incoming_message", "appeal_created", "appeal_followup", "appeal_answered", "appeal_closed", "bot_chat_status_changed", "error"}
+    known_events = {
+        "incoming_message", "appeal_created", "appeal_followup", "appeal_answered", "appeal_closed",
+        "bot_chat_status_changed", "broadcast_started", "broadcast_finished", "error",
+    }
     event_label = translate(f"log.event.{event}", language) if event in known_events else str(event)
     lines = [translate("admin.record_header", language, position=position, count=count, time=item.get("time", "—"), event=event_label)]
     if item.get("chat_id") is not None:
@@ -65,5 +68,20 @@ def format_journal_entry(item: dict[str, Any], language: str, position: int, cou
         lines.append(translate("admin.record_attachment", language, attachment=json.dumps(item["attachment"], ensure_ascii=False)))
     if item.get("details"):
         lines.append(translate("admin.record_details", language, details=item["details"]))
+    if event in {"broadcast_started", "broadcast_finished"}:
+        kind = item.get("kind")
+        if kind in {"news", "ad"}:
+            lines.append(translate("admin.record_broadcast_kind", language, kind=translate(f"broadcast.{kind}", language)))
+        if item.get("admin_id") is not None:
+            lines.append(translate("admin.record_broadcast_admin", language, admin_id=item["admin_id"]))
+        if event == "broadcast_started":
+            lines.append(translate("admin.record_broadcast_recipients", language, count=item.get("recipients", 0)))
+        else:
+            lines.append(
+                translate(
+                    "broadcast.finished", language,
+                    sent=item.get("sent", 0), unavailable=item.get("unavailable", 0), failed=item.get("failed", 0),
+                )
+            )
     result = "\n\n".join(lines)
     return result if len(result) <= 3800 else result[:3799] + "…"

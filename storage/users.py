@@ -67,3 +67,24 @@ async def get_user_at(offset: int) -> tuple[tuple | None, int]:
         return None, count
     values = tuple(row)
     return (*values[:5], values[5].isoformat(), values[6].isoformat()), count
+
+
+async def get_broadcast_snapshot() -> tuple[int, int]:
+    async with get_database_engine().connect() as connection:
+        row = (
+            await connection.execute(select(func.count(), func.coalesce(func.max(users.c.telegram_id), 0)).select_from(users))
+        ).one()
+    return int(row[0]), int(row[1])
+
+
+async def get_broadcast_recipients(after_id: int, through_id: int, limit: int = 200) -> list[int]:
+    async with get_database_engine().connect() as connection:
+        rows = (
+            await connection.execute(
+                select(users.c.telegram_id)
+                .where((users.c.telegram_id > after_id) & (users.c.telegram_id <= through_id))
+                .order_by(users.c.telegram_id)
+                .limit(limit)
+            )
+        ).scalars().all()
+    return [int(user_id) for user_id in rows]

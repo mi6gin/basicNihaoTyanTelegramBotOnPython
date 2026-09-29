@@ -9,3 +9,7 @@ class SupportState(StatesGroup):
 
 class AdminState(StatesGroup):
     waiting_for_answer = State()
+    waiting_for_broadcast_text = State()
+    waiting_for_broadcast_button = State()
+    waiting_for_broadcast_url = State()
+    waiting_for_broadcast_confirmation = State()
