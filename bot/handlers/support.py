@@ -10,7 +10,7 @@ from activity_log import record_event
 from bot.common import authorize_callback, edit_screen, sync_user
 from bot.constants import CATEGORIES, MAX_APPEAL_LENGTH
 from bot.keyboards.admin import admin_notice_keyboard
-from bot.keyboards.support import appeal_keyboard, appeals_keyboard, cancel_keyboard, category_keyboard, created_keyboard, support_keyboard
+from bot.keyboards.support import appeal_keyboard, appeals_keyboard, cancel_keyboard, category_keyboard, created_keyboard, rating_keyboard, support_keyboard
 from bot.presentation import appeal_category, appeal_status, format_dialog
 from bot.states import SupportState
 from localization import translate
@@ -23,6 +23,7 @@ from storage.appeals import (
     get_appeal_at,
     get_appeal_messages,
     get_appeal_offset,
+    rate_closed_appeal,
 )
 from storage.users import get_user_language
 
@@ -350,6 +351,34 @@ async def close_user_appeal(callback: CallbackQuery, state: FSMContext) -> None:
         appeal_keyboard(callback.from_user.id, language, 0, appeal.id, True, any(message.file_id for message in messages)),
     )
     await callback.answer(translate("support.closed_success", language))
+    await callback.message.answer(
+        translate("support.rating_prompt", language, number=appeal.id),
+        reply_markup=rating_keyboard(callback.from_user.id, appeal.id, language),
+    )
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("rateappeal:"))
+async def rate_user_appeal(callback: CallbackQuery) -> None:
+    authorized = await authorize_callback(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    parts = (data.value or "").split(".", maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit() or parts[1] not in {"1", "-1"}:
+        await callback.answer(translate("error.not_found", language), show_alert=True)
+        return
+    appeal_id, rating = int(parts[0]), int(parts[1])
+    appeal = await rate_closed_appeal(callback.from_user.id, appeal_id, rating)
+    if appeal is None:
+        await callback.answer(translate("support.rating_unavailable", language), show_alert=True)
+        return
+    record_event("appeal_rated", appeal_id=appeal.id, user_id=appeal.user_id, rating=rating)
+    await edit_screen(
+        callback,
+        translate("support.rating_thanks", language),
+        created_keyboard(callback.from_user.id, language),
+    )
+    await callback.answer()
 
 
 @router.callback_query(lambda query: (query.data or "").startswith("files:"))

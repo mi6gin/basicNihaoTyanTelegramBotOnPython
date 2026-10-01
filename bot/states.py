@@ -11,6 +11,7 @@ class AdminState(StatesGroup):
     waiting_for_answer = State()
     waiting_for_broadcast_audience = State()
     waiting_for_broadcast_users = State()
+    waiting_for_broadcast_search = State()
     waiting_for_broadcast_text = State()
     waiting_for_broadcast_button = State()
     waiting_for_broadcast_url = State()

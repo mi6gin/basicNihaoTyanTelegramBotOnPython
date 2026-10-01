@@ -34,7 +34,7 @@ def format_journal_entry(item: dict[str, Any], language: str, position: int, cou
     event = item.get("event", "unknown")
     known_events = {
         "incoming_message", "appeal_created", "appeal_followup", "appeal_answered", "appeal_closed",
-        "bot_chat_status_changed", "broadcast_started", "broadcast_finished", "error",
+        "appeal_rated", "bot_chat_status_changed", "broadcast_started", "broadcast_finished", "error",
     }
     event_label = translate(f"log.event.{event}", language) if event in known_events else str(event)
     lines = [translate("admin.record_header", language, position=position, count=count, time=item.get("time", "—"), event=event_label)]
@@ -54,6 +54,9 @@ def format_journal_entry(item: dict[str, Any], language: str, position: int, cou
         lines.append(translate("admin.record_user", language, name=name, username=username, user_id=item["user_id"]))
     if item.get("appeal_id") is not None:
         lines.append(translate("admin.record_appeal", language, appeal_id=item["appeal_id"]))
+    if item.get("rating") in {-1, 1}:
+        label = translate("support.rating_yes" if item["rating"] == 1 else "support.rating_no", language)
+        lines.append(translate("admin.rating", language, rating=label))
     if item.get("category") in LEGACY_CATEGORIES:
         lines.append(translate("admin.record_category", language, category=appeal_category(item["category"], language)))
     if item.get("new_status"):

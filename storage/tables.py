@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Identity, Index, MetaData, String, Table, Text, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Identity, Index, MetaData, SmallInteger, String, Table, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = MetaData()
@@ -30,9 +30,12 @@ appeals = Table(
     Column("workflow_status", String(20), nullable=False, server_default="new"),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("closed_at", DateTime(timezone=True)),
+    Column("rating", SmallInteger),
+    Column("rated_at", DateTime(timezone=True)),
     Column("category", String(20), nullable=False, server_default="other"),
     CheckConstraint("workflow_status IN ('new', 'in_progress', 'waiting_user', 'closed')", name="appeals_workflow_status_check"),
     CheckConstraint("category IN ('technical', 'account', 'question', 'suggestion', 'other')", name="appeals_category_check"),
+    CheckConstraint("rating IN (-1, 1)", name="appeals_rating_check"),
 )
 Index("appeals_user_id_id", appeals.c.user_id, appeals.c.id.desc())
 Index("appeals_workflow_updated", appeals.c.workflow_status, appeals.c.updated_at.desc())

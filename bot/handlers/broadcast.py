@@ -1,6 +1,7 @@
 """Administrator workflow for news and promotional broadcasts."""
 
 import logging
+import re
 from urllib.parse import urlsplit
 
 from aiogram import Bot, F, Router
@@ -18,6 +19,7 @@ from bot.keyboards.admin import (
     broadcast_cancel_keyboard,
     broadcast_confirm_keyboard,
     broadcast_menu_keyboard,
+    broadcast_search_keyboard,
     broadcast_users_keyboard,
 )
 from bot.states import AdminState
@@ -32,6 +34,7 @@ MAX_BUTTON_TEXT_LENGTH = 64
 MAX_BUTTON_URL_LENGTH = 2048
 MAX_SELECTED_USERS = 100
 SELECTOR_PAGE_SIZE = 8
+MAX_USERNAME_QUERY_LENGTH = 32
 
 
 async def authorize_broadcast_callback(callback: CallbackQuery) -> tuple[str, Callback] | None:
@@ -96,24 +99,35 @@ async def broadcast_recipients(draft: dict) -> tuple[int, int, tuple[int, ...] |
     return 0, 0, ()
 
 
-async def show_user_selector(callback: CallbackQuery, state: FSMContext, language: str, requested_page: int) -> None:
+async def show_user_selector(source: CallbackQuery | Message, state: FSMContext, language: str, requested_page: int) -> None:
     draft = await state.get_data()
-    _, count = await get_broadcast_users_page(0, SELECTOR_PAGE_SIZE)
-    if count == 0:
+    query = str(draft.get("search_query") or "")
+    first_rows, count = await get_broadcast_users_page(0, SELECTOR_PAGE_SIZE, query)
+    user_id = source.from_user.id
+    if count == 0 and not query:
         await state.clear()
-        await edit_screen(callback, translate("broadcast.no_users", language), broadcast_menu_keyboard(callback.from_user.id, language))
+        keyboard = broadcast_menu_keyboard(user_id, language)
+        if isinstance(source, CallbackQuery):
+            await edit_screen(source, translate("broadcast.no_users", language), keyboard)
+        else:
+            await source.answer(translate("broadcast.no_users", language), reply_markup=keyboard)
         return
-    page = min(max(requested_page, 0), (count - 1) // SELECTOR_PAGE_SIZE)
-    rows, _ = await get_broadcast_users_page(page * SELECTOR_PAGE_SIZE, SELECTOR_PAGE_SIZE)
+    page = min(max(requested_page, 0), max(0, (count - 1) // SELECTOR_PAGE_SIZE))
+    rows = first_rows if page == 0 else (await get_broadcast_users_page(page * SELECTOR_PAGE_SIZE, SELECTOR_PAGE_SIZE, query))[0]
     selected = set(selected_user_ids(draft))
-    screen_message_id = await edit_screen(
-        callback,
-        translate(
-            "broadcast.select_users", language,
-            selected=len(selected), limit=MAX_SELECTED_USERS, page=page + 1, pages=(count - 1) // SELECTOR_PAGE_SIZE + 1,
-        ),
-        broadcast_users_keyboard(callback.from_user.id, language, rows, selected, page, count, SELECTOR_PAGE_SIZE),
+    filter_label = f"@{query}" if query else translate("broadcast.filter_all", language)
+    text = translate(
+        "broadcast.select_users", language,
+        selected=len(selected), limit=MAX_SELECTED_USERS, page=page + 1,
+        pages=max(1, (count - 1) // SELECTOR_PAGE_SIZE + 1), filter=filter_label,
     )
+    if count == 0:
+        text += "\n\n" + translate("broadcast.no_search_results", language)
+    keyboard = broadcast_users_keyboard(user_id, language, rows, selected, page, count, SELECTOR_PAGE_SIZE, bool(query))
+    if isinstance(source, CallbackQuery):
+        screen_message_id = await edit_screen(source, text, keyboard)
+    else:
+        screen_message_id = (await source.answer(text, reply_markup=keyboard)).message_id
     await state.update_data(selector_page=page, screen_message_id=screen_message_id)
 
 
@@ -215,6 +229,73 @@ async def change_broadcast_user_page(callback: CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastsearch:"))
+async def start_broadcast_user_search(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, _ = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state or not is_current_broadcast_screen(callback, await state.get_data()):
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    screen_message_id = await edit_screen(
+        callback, translate("broadcast.search_prompt", language, limit=MAX_USERNAME_QUERY_LENGTH),
+        broadcast_search_keyboard(callback.from_user.id, language),
+    )
+    await state.set_state(AdminState.waiting_for_broadcast_search)
+    await state.update_data(screen_message_id=screen_message_id)
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastsearchback:"))
+async def return_from_broadcast_search(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, _ = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_search.state or not is_current_broadcast_screen(callback, await state.get_data()):
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    await state.set_state(AdminState.waiting_for_broadcast_users)
+    await show_user_selector(callback, state, language, 0)
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("broadcastclear:"))
+async def clear_broadcast_user_search(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_broadcast_callback(callback)
+    if authorized is None:
+        return
+    language, _ = authorized
+    if await state.get_state() != AdminState.waiting_for_broadcast_users.state or not is_current_broadcast_screen(callback, await state.get_data()):
+        await callback.answer(translate("broadcast.expired", language), show_alert=True)
+        return
+    await state.update_data(search_query="")
+    await show_user_selector(callback, state, language, 0)
+    await callback.answer()
+
+
+@router.message(AdminState.waiting_for_broadcast_search, F.text)
+async def receive_broadcast_user_search(message: Message, state: FSMContext) -> None:
+    language = await authorize_broadcast_message(message)
+    if language is None:
+        return
+    query = message.text.strip().removeprefix("@")
+    if not 1 <= len(query) <= MAX_USERNAME_QUERY_LENGTH or re.fullmatch(r"[A-Za-z0-9_]+", query) is None:
+        await message.answer(translate("broadcast.invalid_search", language, limit=MAX_USERNAME_QUERY_LENGTH))
+        return
+    await state.update_data(search_query=query)
+    await state.set_state(AdminState.waiting_for_broadcast_users)
+    await show_user_selector(message, state, language, 0)
+
+
+@router.message(AdminState.waiting_for_broadcast_search)
+async def reject_broadcast_search_attachment(message: Message) -> None:
+    language = await authorize_broadcast_message(message)
+    if language is not None:
+        await message.answer(translate("broadcast.invalid_search", language, limit=MAX_USERNAME_QUERY_LENGTH))
+
+
 @router.callback_query(lambda query: (query.data or "").startswith("broadcastpick:"))
 async def toggle_broadcast_user(callback: CallbackQuery, state: FSMContext) -> None:
     authorized = await authorize_broadcast_callback(callback)
@@ -279,7 +360,7 @@ async def remind_broadcast_audience(message: Message) -> None:
 async def remind_broadcast_users(message: Message) -> None:
     language = await authorize_broadcast_message(message)
     if language is not None:
-        await message.answer(translate("broadcast.users_hint", language), reply_markup=broadcast_cancel_keyboard(message.from_user.id, language))
+        await message.answer(translate("broadcast.users_hint", language))
 
 
 @router.message(AdminState.waiting_for_broadcast_text, F.text)
@@ -364,6 +445,7 @@ async def cancel_broadcast_draft(callback: CallbackQuery, state: FSMContext) -> 
     if current_state not in {
         AdminState.waiting_for_broadcast_audience.state,
         AdminState.waiting_for_broadcast_users.state,
+        AdminState.waiting_for_broadcast_search.state,
         AdminState.waiting_for_broadcast_text.state,
         AdminState.waiting_for_broadcast_button.state,
         AdminState.waiting_for_broadcast_url.state,

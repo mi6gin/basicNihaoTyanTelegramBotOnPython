@@ -90,13 +90,19 @@ async def get_broadcast_recipients(after_id: int, through_id: int, limit: int = 
     return [int(user_id) for user_id in rows]
 
 
-async def get_broadcast_users_page(offset: int, limit: int = 8) -> tuple[list[tuple[int, str | None, str, str | None]], int]:
+async def get_broadcast_users_page(offset: int, limit: int = 8, username_query: str = "") -> tuple[list[tuple[int, str | None, str, str | None]], int]:
+    escaped = username_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    condition = users.c.username.ilike(f"%{escaped}%", escape="\\") if username_query else None
+    count_query = select(func.count()).select_from(users)
+    page_query = select(users.c.telegram_id, users.c.username, users.c.first_name, users.c.last_name)
+    if condition is not None:
+        count_query = count_query.where(condition)
+        page_query = page_query.where(condition)
     async with get_database_engine().connect() as connection:
-        count = int(await connection.scalar(select(func.count()).select_from(users)) or 0)
+        count = int(await connection.scalar(count_query) or 0)
         rows = (
             await connection.execute(
-                select(users.c.telegram_id, users.c.username, users.c.first_name, users.c.last_name)
-                .order_by(users.c.last_seen_at.desc(), users.c.telegram_id.desc())
+                page_query.order_by(users.c.last_seen_at.desc(), users.c.telegram_id.desc())
                 .limit(limit)
                 .offset(max(offset, 0))
             )

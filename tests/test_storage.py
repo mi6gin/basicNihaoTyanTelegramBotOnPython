@@ -53,6 +53,27 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await chats.count_active_chats(), 0)
         self.assertEqual((await chats.get_chat_at(0))[0][4], "left")
 
+    async def test_broadcast_username_search_is_case_insensitive_and_literal(self) -> None:
+        await users.save_user(7, "Mi6_Gin", "One", None, "ru")
+        await users.save_user(8, "mi6xgin", "Two", None, "ru")
+        await users.save_user(9, None, "Three", None, "ru")
+        matches, count = await users.get_broadcast_users_page(0, username_query="MI6_")
+        self.assertEqual((count, [item[0] for item in matches]), (1, [7]))
+        all_users, count = await users.get_broadcast_users_page(0)
+        self.assertEqual((count, len(all_users)), (3, 3))
+
+    async def test_only_owner_can_rate_closed_appeal_once(self) -> None:
+        await self.add_user(7)
+        await self.add_user(8)
+        appeal_id = await appeals.create_appeal(7, "Problem")
+        self.assertIsNone(await appeals.rate_closed_appeal(7, appeal_id, 1))
+        await appeals.close_appeal(appeal_id)
+        self.assertIsNone(await appeals.rate_closed_appeal(8, appeal_id, -1))
+        rated = await appeals.rate_closed_appeal(7, appeal_id, 1)
+        self.assertEqual(rated.rating, 1)
+        self.assertIsNone(await appeals.rate_closed_appeal(7, appeal_id, -1))
+        self.assertEqual((await appeals.get_admin_appeal(appeal_id)).rating, 1)
+
     async def test_appeal_supports_dialog_until_closed(self) -> None:
         await self.add_user(7)
         appeal_id = await appeals.create_appeal(7, "First problem", category="technical")

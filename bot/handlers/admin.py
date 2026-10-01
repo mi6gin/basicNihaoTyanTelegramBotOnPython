@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 from activity_log import TIMEZONE, get_journal, record_event
 from bot.callbacks import Callback
 from bot.common import authorize_callback, edit_screen, sync_user
-from bot.constants import CATEGORIES, MAX_ANSWER_LENGTH
+from bot.constants import CATEGORIES, MAX_ANSWER_LENGTH, QUICK_REPLY_KEYS
 from bot.keyboards.admin import (
     admin_appeal_keyboard,
     admin_appeals_keyboard,
@@ -21,8 +21,10 @@ from bot.keyboards.admin import (
     admin_log_summary_keyboard,
     admin_logs_keyboard,
     admin_menu_keyboard,
+    admin_quick_preview_keyboard,
+    admin_reply_templates_keyboard,
 )
-from bot.keyboards.support import created_keyboard
+from bot.keyboards.support import created_keyboard, rating_keyboard
 from bot.presentation import appeal_category, appeal_status, format_dialog, format_journal_entry
 from bot.states import AdminState
 from localization import translate
@@ -92,6 +94,38 @@ def parse_appeal_position(value: str | None) -> tuple[int, str, int] | None:
     filter_name = parts[1] if len(parts) > 1 and parts[1] in allowed else "all"
     offset = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
     return int(parts[0]), filter_name, offset
+
+
+def admin_appeal_view_text(appeal: Appeal, messages: list, language: str) -> str:
+    result = translate(
+        "admin.view", language,
+        number=appeal.id,
+        user_id=appeal.user_id,
+        category=appeal_category(appeal.category, language),
+        dialog=format_dialog(messages, language),
+        status=appeal_status(appeal, language),
+    )
+    if appeal.workflow_status == "closed":
+        rating = translate("admin.rating_none" if appeal.rating is None else "support.rating_yes" if appeal.rating == 1 else "support.rating_no", language)
+        result += "\n\n" + translate("admin.rating", language, rating=rating)
+    return result
+
+
+async def current_admin_answer(callback: CallbackQuery, state: FSMContext, appeal_id: int) -> dict | None:
+    if await state.get_state() != AdminState.waiting_for_answer.state:
+        return None
+    draft = await state.get_data()
+    if draft.get("appeal_id") != appeal_id or draft.get("prompt_message_id") != callback.message.message_id:
+        return None
+    return draft
+
+
+async def save_admin_answer(bot: Bot, appeal_id: int, answer_text: str, admin_id: int) -> tuple[Appeal | None, bool]:
+    appeal = await answer_appeal(appeal_id, answer_text, admin_id)
+    if appeal is None:
+        return None, False
+    record_event("appeal_answered", appeal_id=appeal.id, admin_id=admin_id, user_id=appeal.user_id, category=appeal.category)
+    return appeal, await notify_user_about_answer(bot, appeal, answer_text)
 
 
 @router.callback_query(lambda query: (query.data or "").startswith("admin:"))
@@ -350,20 +384,10 @@ async def view_admin_appeal(callback: CallbackQuery) -> None:
         await callback.answer(translate("error.not_found", language), show_alert=True)
         return
     _, filter_name, offset = position
-    status = appeal_status(appeal, language)
     messages = await get_appeal_messages(appeal.id)
-    dialog = format_dialog(messages, language)
     await edit_screen(
         callback,
-        translate(
-            "admin.view",
-            language,
-            number=appeal.id,
-            user_id=appeal.user_id,
-            category=appeal_category(appeal.category, language),
-            dialog=dialog,
-            status=status,
-        ),
+        admin_appeal_view_text(appeal, messages, language),
         admin_appeal_keyboard(
             callback.from_user.id,
             language,
@@ -393,10 +417,74 @@ async def request_admin_answer(callback: CallbackQuery, state: FSMContext) -> No
     prompt_message_id = await edit_screen(
         callback,
         translate("admin.answer_prompt", language, number=appeal.id, limit=MAX_ANSWER_LENGTH),
-        admin_cancel_keyboard(callback.from_user.id, language, appeal.id),
+        admin_reply_templates_keyboard(callback.from_user.id, language, appeal.id),
     )
     await state.set_state(AdminState.waiting_for_answer)
     await state.update_data(appeal_id=appeal.id, prompt_message_id=prompt_message_id)
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("adminquick:"))
+async def choose_admin_quick_reply(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_admin(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    parts = (data.value or "").split(".", maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit() or parts[1] not in QUICK_REPLY_KEYS:
+        await callback.answer(translate("admin.answer_expired", language), show_alert=True)
+        return
+    appeal_id, key = int(parts[0]), parts[1]
+    if await current_admin_answer(callback, state, appeal_id) is None:
+        await callback.answer(translate("admin.answer_expired", language), show_alert=True)
+        return
+    answer_text = translate(f"admin.quick_text_{key}", language)
+    prompt_message_id = await edit_screen(
+        callback,
+        translate("admin.quick_preview", language, text=answer_text),
+        admin_quick_preview_keyboard(callback.from_user.id, language, appeal_id),
+    )
+    await state.update_data(quick_text=answer_text, prompt_message_id=prompt_message_id)
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("adminquickedit:"))
+async def edit_admin_quick_reply(callback: CallbackQuery, state: FSMContext) -> None:
+    authorized = await authorize_admin(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    appeal_id = int(data.value) if data.value and data.value.isdigit() else 0
+    draft = await current_admin_answer(callback, state, appeal_id)
+    if draft is None or not draft.get("quick_text"):
+        await callback.answer(translate("admin.answer_expired", language), show_alert=True)
+        return
+    prompt_message_id = await edit_screen(
+        callback,
+        translate("admin.quick_edit_prompt", language, text=draft["quick_text"], limit=MAX_ANSWER_LENGTH),
+        admin_cancel_keyboard(callback.from_user.id, language, appeal_id),
+    )
+    await state.update_data(quick_text=None, prompt_message_id=prompt_message_id)
+    await callback.answer()
+
+
+@router.callback_query(lambda query: (query.data or "").startswith("adminquicksend:"))
+async def send_admin_quick_reply(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    authorized = await authorize_admin(callback)
+    if authorized is None:
+        return
+    language, data = authorized
+    appeal_id = int(data.value) if data.value and data.value.isdigit() else 0
+    draft = await current_admin_answer(callback, state, appeal_id)
+    answer_text = draft.get("quick_text") if draft else None
+    if not isinstance(answer_text, str) or not answer_text or len(answer_text) > MAX_ANSWER_LENGTH:
+        await callback.answer(translate("admin.answer_expired", language), show_alert=True)
+        return
+    await state.clear()
+    appeal, notification_sent = await save_admin_answer(bot, appeal_id, answer_text, callback.from_user.id)
+    result_key = "admin.answer_saved" if notification_sent else "admin.answer_saved_no_notification"
+    text = translate(result_key, language, number=appeal.id) if appeal else translate("admin.already_answered", language)
+    await edit_screen(callback, text, admin_menu_keyboard(callback.from_user.id, language))
     await callback.answer()
 
 
@@ -423,20 +511,10 @@ async def cancel_admin_answer(callback: CallbackQuery, state: FSMContext) -> Non
             admin_menu_keyboard(callback.from_user.id, language),
         )
     else:
-        status = appeal_status(appeal, language)
         messages = await get_appeal_messages(appeal.id)
-        dialog = format_dialog(messages, language)
         await edit_screen(
             callback,
-            translate(
-                "admin.view",
-                language,
-                number=appeal.id,
-                user_id=appeal.user_id,
-                category=appeal_category(appeal.category, language),
-                dialog=dialog,
-                status=status,
-            ),
+            admin_appeal_view_text(appeal, messages, language),
             admin_appeal_keyboard(
                 callback.from_user.id,
                 language,
@@ -472,19 +550,17 @@ async def receive_admin_answer(message: Message, state: FSMContext, bot: Bot) ->
         return
     state_data = await state.get_data()
     appeal_id = state_data.get("appeal_id")
-    appeal = await answer_appeal(appeal_id, answer_text, message.from_user.id) if isinstance(appeal_id, int) else None
+    appeal, notification_sent = await save_admin_answer(bot, appeal_id, answer_text, message.from_user.id) if isinstance(appeal_id, int) else (None, False)
     await state.clear()
     if appeal is None:
         await message.answer(translate("admin.already_answered", language), reply_markup=admin_menu_keyboard(message.from_user.id, language))
         return
-    record_event("appeal_answered", appeal_id=appeal.id, admin_id=message.from_user.id, user_id=appeal.user_id, category=appeal.category)
     prompt_message_id = state_data.get("prompt_message_id")
     if prompt_message_id:
         try:
             await bot.delete_message(message.chat.id, prompt_message_id)
         except TelegramBadRequest:
             pass
-    notification_sent = await notify_user_about_answer(bot, appeal, answer_text)
     result_key = "admin.answer_saved" if notification_sent else "admin.answer_saved_no_notification"
     await message.answer(
         translate(result_key, language, number=appeal.id),
@@ -517,8 +593,12 @@ async def close_admin_appeal(callback: CallbackQuery, state: FSMContext, bot: Bo
         user_language = await get_user_language(appeal.user_id)
         await bot.send_message(
             appeal.user_id,
-            translate("support.closed_by_admin", user_language, number=appeal.id),
-            reply_markup=created_keyboard(appeal.user_id, user_language),
+            (
+                translate("support.closed_by_admin", user_language, number=appeal.id)
+                + "\n\n"
+                + translate("support.rating_prompt", user_language, number=appeal.id)
+            ),
+            reply_markup=rating_keyboard(appeal.user_id, appeal.id, user_language),
         )
     except Exception:
         logger.exception("Не удалось уведомить пользователя %s о закрытии обращения %s", appeal.user_id, appeal.id)

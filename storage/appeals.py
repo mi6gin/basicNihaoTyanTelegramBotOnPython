@@ -19,6 +19,7 @@ APPEAL_COLUMNS = (
     appeals.c.updated_at,
     appeals.c.closed_at,
     appeals.c.category,
+    appeals.c.rating,
 )
 
 
@@ -42,6 +43,7 @@ def _appeal(row) -> Appeal | None:
         updated_at=_timestamp(values[8]),
         closed_at=_timestamp(values[9]),
         category=values[10],
+        rating=values[11],
     )
 
 
@@ -272,6 +274,25 @@ async def close_appeal(appeal_id: int) -> Appeal | None:
         update(appeals)
         .where((appeals.c.id == appeal_id) & (appeals.c.workflow_status != "closed"))
         .values(status=True, workflow_status="closed", updated_at=now, closed_at=now)
+        .returning(*APPEAL_COLUMNS)
+    )
+    async with get_database_engine().begin() as connection:
+        row = (await connection.execute(statement)).one_or_none()
+    return _appeal(row)
+
+
+async def rate_closed_appeal(user_id: int, appeal_id: int, rating: int) -> Appeal | None:
+    if rating not in {-1, 1}:
+        return None
+    statement = (
+        update(appeals)
+        .where(
+            (appeals.c.id == appeal_id)
+            & (appeals.c.user_id == user_id)
+            & (appeals.c.workflow_status == "closed")
+            & appeals.c.rating.is_(None)
+        )
+        .values(rating=rating, rated_at=datetime.now(UTC))
         .returning(*APPEAL_COLUMNS)
     )
     async with get_database_engine().begin() as connection:

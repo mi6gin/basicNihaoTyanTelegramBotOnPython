@@ -3,3 +3,4 @@ MAX_ANSWER_LENGTH = 1500
 
 CATEGORIES = ("technical", "suggestion", "other")
 LEGACY_CATEGORIES = (*CATEGORIES, "account", "question")
+QUICK_REPLY_KEYS = ("details", "checking", "resolved")

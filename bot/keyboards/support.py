@@ -80,3 +80,15 @@ def created_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=translate("button.back", language), callback_data=Callback("support", user_id).pack())],
         ]
     )
+
+
+def rating_keyboard(user_id: int, appeal_id: int, language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=translate("support.rating_yes", language), callback_data=Callback("rateappeal", user_id, f"{appeal_id}.1").pack()),
+                InlineKeyboardButton(text=translate("support.rating_no", language), callback_data=Callback("rateappeal", user_id, f"{appeal_id}.-1").pack()),
+            ],
+            [InlineKeyboardButton(text=translate("support.my_appeals", language), callback_data=Callback("appeals", user_id, "0").pack())],
+        ]
+    )

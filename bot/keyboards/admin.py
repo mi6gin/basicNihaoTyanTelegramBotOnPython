@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.callbacks import Callback
-from bot.constants import CATEGORIES
+from bot.constants import CATEGORIES, QUICK_REPLY_KEYS
 from localization import translate
 
 
@@ -49,6 +49,7 @@ def broadcast_users_keyboard(
     page: int,
     count: int,
     page_size: int = 8,
+    search_active: bool = False,
 ) -> InlineKeyboardMarkup:
     buttons = []
     for telegram_id, username, first_name, last_name in users:
@@ -60,14 +61,28 @@ def broadcast_users_keyboard(
         )
     navigation = []
     if page > 0:
-        navigation.append(InlineKeyboardButton(text=translate("button.newer", language), callback_data=Callback("broadcastpage", user_id, str(page - 1)).pack()))
+        navigation.append(InlineKeyboardButton(
+            text=translate("button.newer", language), callback_data=Callback("broadcastpage", user_id, str(page - 1)).pack(),
+        ))
     if (page + 1) * page_size < count:
-        navigation.append(InlineKeyboardButton(text=translate("button.older", language), callback_data=Callback("broadcastpage", user_id, str(page + 1)).pack()))
+        navigation.append(InlineKeyboardButton(
+            text=translate("button.older", language), callback_data=Callback("broadcastpage", user_id, str(page + 1)).pack(),
+        ))
     if navigation:
         buttons.append(navigation)
+    buttons.append([InlineKeyboardButton(text=translate("broadcast.search", language), callback_data=Callback("broadcastsearch", user_id).pack())])
+    if search_active:
+        buttons.append([InlineKeyboardButton(text=translate("broadcast.clear_search", language), callback_data=Callback("broadcastclear", user_id).pack())])
     buttons.append([InlineKeyboardButton(text=translate("broadcast.users_ready", language), callback_data=Callback("broadcastready", user_id).pack())])
     buttons.append([InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("broadcastcancel", user_id).pack())])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def broadcast_search_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=translate("button.back", language), callback_data=Callback("broadcastsearchback", user_id).pack())],
+        [InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("broadcastcancel", user_id).pack())],
+    ])
 
 
 def broadcast_cancel_keyboard(user_id: int, language: str) -> InlineKeyboardMarkup:
@@ -275,6 +290,26 @@ def admin_cancel_keyboard(user_id: int, language: str, appeal_id: int) -> Inline
             ],
         ]
     )
+
+
+def admin_reply_templates_keyboard(user_id: int, language: str, appeal_id: int) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton(
+            text=translate(f"admin.quick_label_{key}", language),
+            callback_data=Callback("adminquick", user_id, f"{appeal_id}.{key}").pack(),
+        )]
+        for key in QUICK_REPLY_KEYS
+    ]
+    buttons.append([InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("admincancel", user_id, str(appeal_id)).pack())])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_quick_preview_keyboard(user_id: int, language: str, appeal_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=translate("admin.quick_send", language), callback_data=Callback("adminquicksend", user_id, str(appeal_id)).pack())],
+        [InlineKeyboardButton(text=translate("admin.quick_edit", language), callback_data=Callback("adminquickedit", user_id, str(appeal_id)).pack())],
+        [InlineKeyboardButton(text=translate("button.cancel", language), callback_data=Callback("admincancel", user_id, str(appeal_id)).pack())],
+    ])
 
 
 def admin_notice_keyboard(admin_id: int, appeal_id: int, language: str) -> InlineKeyboardMarkup:

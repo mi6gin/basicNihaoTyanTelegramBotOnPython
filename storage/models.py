@@ -14,6 +14,7 @@ class Appeal:
     updated_at: str | None
     closed_at: str | None
     category: str
+    rating: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
