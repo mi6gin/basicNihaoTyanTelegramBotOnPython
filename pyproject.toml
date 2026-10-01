@@ -11,6 +11,9 @@ dependencies = [
     "SQLAlchemy[asyncio]>=2.0.41,<3.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
 [tool.ruff]
 line-length = 160
 target-version = "py312"

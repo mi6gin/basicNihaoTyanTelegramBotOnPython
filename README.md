@@ -83,10 +83,17 @@ Telegram передаёт боту не все сообщения группы �
 
 ## Проверка
 
-Тесты не обращаются к Telegram. Для интеграционных тестов хранилища задайте отдельную PostgreSQL-базу (она будет очищена тестами):
+Установите зависимости для тестов и запустите pytest. Проверки кнопок и состояний не обращаются к Telegram и не запускают бота:
 
 ```shell
-TEST_DATABASE_URL=postgresql+asyncpg://bot:bot@localhost:5432/bot_test python -m unittest discover -v
+pip install -e '.[test]'
+python -m pytest -q
+```
+
+Для интеграционных тестов хранилища задайте отдельную PostgreSQL-базу (она будет очищена тестами):
+
+```shell
+TEST_DATABASE_URL=postgresql+asyncpg://bot:bot@localhost:5432/bot_test python -m pytest -q
 ```
 
 ## Пользовательский сценарий
