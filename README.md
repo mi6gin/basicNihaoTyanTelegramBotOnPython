@@ -69,7 +69,7 @@ docker compose logs -f bot
 ```shell
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 cp .env.example .env
 ```
 
@@ -78,10 +78,10 @@ cp .env.example .env
 ```shell
 alembic upgrade head
 python -m scripts.import_sqlite
-python main.py
+python -m nihao_tyan
 ```
 
-`ADMIN_IDS` — Telegram ID администраторов через запятую. Если установить `DROP_PENDING_UPDATES=true`, накопившиеся за время простоя обновления будут удалены при запуске.
+`ADMIN_IDS` — Telegram ID администраторов через запятую. `BOT_DATA_DIR` задаёт каталог для журналов и прежних SQLite-файлов; по умолчанию используется `data` в текущем рабочем каталоге. Если установить `DROP_PENDING_UPDATES=true`, накопившиеся за время простоя обновления будут удалены при запуске.
 
 ## 🗓 Журналы и приватность
 
@@ -126,17 +126,19 @@ TEST_DATABASE_URL=postgresql+asyncpg://bot:bot@localhost:5432/bot_test python -m
 ## 🗂 Структура проекта
 
 ```text
-├── main.py                  # запуск бота
-├── manage.py                # конфигурация и polling
-├── bot/
-│   ├── commands/            # /start и /help
-│   ├── handlers/            # пользовательские и админ-сценарии
-│   └── keyboards/           # inline-клавиатуры
-├── storage/                 # PostgreSQL, запросы и FSM
+├── src/nihao_tyan/
+│   ├── __main__.py          # запуск: python -m nihao_tyan
+│   ├── app.py               # конфигурация и polling
+│   ├── config.py            # переменные окружения
+│   ├── telegram/            # команды, обработчики и клавиатуры
+│   ├── services/            # журнал и рассылка
+│   ├── storage/             # PostgreSQL, запросы и FSM
+│   └── i18n/                # переводы и JSON-файлы языков
 ├── migrations/              # миграции Alembic
 ├── scripts/import_sqlite.py # перенос прежних SQLite-данных
-├── locales/                 # переводы
-├── tests/                   # автоматические тесты
+├── tests/unit/              # быстрые проверки логики
+├── tests/integration/       # проверки с отдельной PostgreSQL-базой
+├── data/                    # журналы и старые SQLite-файлы
 ├── Dockerfile
 └── compose.yaml
 ```

@@ -13,8 +13,9 @@ RUN useradd --create-home --uid 10001 botuser \
     && chown -R botuser:botuser /app
 
 COPY --chown=botuser:botuser . .
+RUN pip install --no-cache-dir --no-deps .
 
 USER botuser
 
 VOLUME ["/app/data"]
-CMD ["python", "main.py"]
+CMD ["python", "-m", "nihao_tyan"]

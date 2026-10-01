@@ -5,8 +5,8 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from settings import settings
-from storage.tables import metadata
+from nihao_tyan.config import settings
+from nihao_tyan.storage.tables import metadata
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

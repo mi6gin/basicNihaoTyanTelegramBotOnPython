@@ -10,9 +10,9 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
-from settings import settings
-from storage import APPEALS_DATABASE, USERS_DATABASE, create_database_engine
-from storage.tables import appeal_messages, appeals, bot_chats, data_imports, fsm_states, users
+from nihao_tyan.config import settings
+from nihao_tyan.storage.database import APPEALS_DATABASE, USERS_DATABASE, create_database_engine
+from nihao_tyan.storage.tables import appeal_messages, appeals, bot_chats, data_imports, fsm_states, users
 
 IMPORT_NAME = "legacy-sqlite-v1"
 

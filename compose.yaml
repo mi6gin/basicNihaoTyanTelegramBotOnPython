@@ -21,7 +21,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["sh", "-c", "alembic upgrade head && python -m scripts.import_sqlite && python main.py"]
+    command: ["sh", "-c", "alembic upgrade head && python -m scripts.import_sqlite && python -m nihao_tyan"]
     volumes:
       - bot-data:/app/data
 
